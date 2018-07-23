@@ -48,32 +48,6 @@ namespace Palmpose360
             sensorChooser.Start();
         }
 
-        /// <summary>
-        /// Event handler for Kinect sensor's ColorFrameReady event
-        /// </summary>
-        /// <param name="sender">object sending the event</param>
-        /// <param name="e">event arguments</param>
-        private void SensorColorFrameReady(object sender, ColorImageFrameReadyEventArgs e)
-        {
-            using (ColorImageFrame colorFrame = e.OpenColorImageFrame())
-            {
-                if (colorFrame != null)
-                {
-                    // Copy the pixel data from the image to a temporary array
-                    colorFrame.CopyPixelDataTo(this.colorPixels);
-
-                    // Write the pixel data into our bitmap
-                    this.colorBitmap.WritePixels(
-                        new Int32Rect(0, 0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight),
-                        this.colorPixels,
-                        this.colorBitmap.PixelWidth * sizeof(int),
-                        0);
-                }
-            }
-
-
-        }
-
         private void KinectSensorOnAllFramesReady(object sender, AllFramesReadyEventArgs allFramesReadyEventArgs)
         {
             using (var colorImageFrame = allFramesReadyEventArgs.OpenColorImageFrame())
@@ -83,23 +57,15 @@ namespace Palmpose360
                     return;
                 }
 
-                // Make a copy of the color frame for displaying.
-                //var haveNewFormat = this.currentColorImageFormat != colorImageFrame.Format;
-                //if (haveNewFormat)
-                //{
-                //    this.currentColorImageFormat = colorImageFrame.Format;
-                //    this.colorImageData = new byte[colorImageFrame.PixelDataLength];
-                //    this.colorImageWritableBitmap = new WriteableBitmap(
-                //        colorImageFrame.Width, colorImageFrame.Height, 96, 96, PixelFormats.Bgr32, null);
-                //    ColorImage.Source = this.colorImageWritableBitmap;
-                //}
+                colorImageFrame.CopyPixelDataTo(this.colorPixels);
+                this.colorBitmap.WritePixels(
+                        new Int32Rect(0, 0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight),
+                        this.colorPixels,
+                        this.colorBitmap.PixelWidth * sizeof(int), 0
+                    );
 
-                //colorImageFrame.CopyPixelDataTo(this.colorImageData);
-                //this.colorImageWritableBitmap.WritePixels(
-                //    new Int32Rect(0, 0, colorImageFrame.Width, colorImageFrame.Height),
-                //    this.colorImageData,
-                //    colorImageFrame.Width * Bgr32BytesPerPixel,
-                //    0);
+
+
             }
         }
 
@@ -127,11 +93,13 @@ namespace Palmpose360
                 {
                     newSensor.ColorStream.Enable(ColorImageFormat.RgbResolution640x480Fps30);
                     newSensor.DepthStream.Enable(DepthImageFormat.Resolution320x240Fps30);
+                    newSensor.SkeletonStream.Enable();
                     try
                     {
                         // This will throw on non Kinect For Windows devices.
                         newSensor.DepthStream.Range = DepthRange.Near;
                         newSensor.SkeletonStream.EnableTrackingInNearRange = true;
+                        //newSensor.SkeletonStream.TrackingMode = SkeletonTrackingMode.Seated;
                     }
                     catch (InvalidOperationException)
                     {
@@ -149,11 +117,7 @@ namespace Palmpose360
                     this.Image.Source = this.colorBitmap;
 
                     // Add an event handler to be called whenever there is new color frame data
-                    this.sensor.ColorFrameReady += this.SensorColorFrameReady;
-
-                    //newSensor.SkeletonStream.TrackingMode = SkeletonTrackingMode.Seated;
-                    //newSensor.SkeletonStream.Enable();
-                    //newSensor.AllFramesReady += KinectSensorOnAllFramesReady;
+                    this.sensor.AllFramesReady += KinectSensorOnAllFramesReady;
                 }
                 catch (InvalidOperationException)
                 {
