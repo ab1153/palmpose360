@@ -22,6 +22,9 @@ namespace Palmpose360
     /// </summary>
     public partial class MainWindow : Window
     {
+        private const DepthImageFormat DepthFormat = DepthImageFormat.Resolution320x240Fps30;
+        private const ColorImageFormat ColorFormat = ColorImageFormat.RgbResolution640x480Fps30;
+
         /// <summary>
         /// Active Kinect sensor
         /// </summary>
@@ -30,6 +33,7 @@ namespace Palmpose360
         /// <summary>
         /// Bitmap that will hold color information
         /// </summary>
+        /// 
         private WriteableBitmap colorBitmap;
         private DrawingGroup drawingGroup;
         private DrawingImage imageSource;
@@ -50,8 +54,18 @@ namespace Palmpose360
         /// Intermediate storage for the color data received from the camera
         /// </summary>
         private byte[] colorPixels;
+        private DepthImagePixel[] depthPixels;
+        private int[] playerPixelData;
+        private ColorImagePoint[] colorCoordinates;
+        /// Inverse scaling factor between color and depth
+        private int colorToDepthDivisor;
+
 
         private readonly KinectSensorChooser sensorChooser = new KinectSensorChooser();
+        private int depthWidth;
+        private int depthHeight;
+        private int colorWidth;
+        private int colorHeight;
 
         /// <summary>
         /// Initializes a new instance of the MainWindow class.
@@ -64,84 +78,6 @@ namespace Palmpose360
             InitializeComponent();
             sensorChooser.KinectChanged += SensorChooserOnKinectChanged;
             sensorChooser.Start();
-
-        }
-
-        private void KinectSensorOnAllFramesReady(object sender, AllFramesReadyEventArgs allFramesReadyEventArgs)
-        {
-            using (var colorImageFrame = allFramesReadyEventArgs.OpenColorImageFrame())
-            {
-                if (colorImageFrame == null)
-                {
-                    return;
-                }
-
-                colorImageFrame.CopyPixelDataTo(this.colorPixels);
-
-                this.colorBitmap.Lock();
-                this.colorBitmap.WritePixels(new Int32Rect(0, 0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight),
-                    this.colorPixels,
-                    this.colorBitmap.PixelWidth * sizeof(int), 0);
-                this.colorBitmap.Unlock();
-            }
-
-            bool bodyReceived = false;
-            Skeleton[] skeletons = null;
-            List<Point> points = new List<Point>();
-
-            using (SkeletonFrame skeletonFrame = allFramesReadyEventArgs.OpenSkeletonFrame())
-            {
-                if (skeletonFrame != null)
-                {
-                    bodyReceived = true;
-                    skeletons = new Skeleton[skeletonFrame.SkeletonArrayLength];
-                    skeletonFrame.CopySkeletonDataTo(skeletons);
-                }
-            }
-
-            if (bodyReceived)
-            {
-                foreach(var skel in skeletons)
-                {
-                    if (skel.TrackingState == SkeletonTrackingState.Tracked)
-                    {
-                        Joint handright = skel.Joints[JointType.HandRight];
-                        Joint wristright = skel.Joints[JointType.WristRight];
-
-                        ColorImagePoint handColor =
-                        this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(handright.Position,
-                            ColorImageFormat.RgbResolution640x480Fps30);
-                        ColorImagePoint wristColor =
-                        this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(wristright.Position,
-                            ColorImageFormat.RgbResolution640x480Fps30);
-
-                        points.Add(new Point(handColor.X, handColor.Y));
-                        points.Add(new Point(wristColor.X, wristColor.Y));
-                    }
-                }
-            }
-
-            using (var depthFrame = allFramesReadyEventArgs.OpenDepthImageFrame())
-            {
-                if (depthFrame == null)
-                {
-                    return;
-                }
-
-            }
-
-            using (DrawingContext dc = this.drawingGroup.Open())
-            {
-                dc.DrawImage(this.colorBitmap, new Rect(0, 0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight));
-
-                for (var i = 0;i < points.Count; i+=2)
-                {
-                    dc.DrawLine(this.penY, points[i], points[i+1]);
-                }
-
-                // prevent drawing outside of our render area
-                this.drawingGroup.ClipGeometry = new RectangleGeometry(new Rect(0.0, 0.0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight));
-            }
 
         }
 
@@ -170,6 +106,12 @@ namespace Palmpose360
                     newSensor.ColorStream.Enable(ColorImageFormat.RgbResolution640x480Fps30);
                     newSensor.DepthStream.Enable(DepthImageFormat.Resolution320x240Fps30);
                     newSensor.SkeletonStream.Enable();
+                    this.depthWidth = this.sensor.DepthStream.FrameWidth;
+                    this.depthHeight = this.sensor.DepthStream.FrameHeight;
+                    this.colorWidth = this.sensor.ColorStream.FrameWidth;
+                    this.colorHeight = this.sensor.ColorStream.FrameHeight;
+                    this.colorToDepthDivisor = colorWidth / this.depthWidth;
+
                     try
                     {
                         // This will throw on non Kinect For Windows devices.
@@ -185,28 +127,190 @@ namespace Palmpose360
 
                     // Allocate space to put the pixels we'll receive
                     this.colorPixels = new byte[this.sensor.ColorStream.FramePixelDataLength];
+                    this.depthPixels = new DepthImagePixel[this.sensor.DepthStream.FramePixelDataLength];
+                    this.colorCoordinates = new ColorImagePoint[this.sensor.DepthStream.FramePixelDataLength];
+                    this.playerPixelData = new int[this.sensor.DepthStream.FramePixelDataLength];
+
 
                     // This is the bitmap we'll display on-screen
-                    this.colorBitmap = new WriteableBitmap(this.sensor.ColorStream.FrameWidth, this.sensor.ColorStream.FrameHeight, 96.0, 96.0, PixelFormats.Bgr32, null);
+                    this.colorBitmap = new WriteableBitmap(this.colorWidth, this.colorHeight, 96.0, 96.0, PixelFormats.Bgr32, null);
 
                     // Add an event handler to be called whenever there is new color frame data
                     this.sensor.AllFramesReady += KinectSensorOnAllFramesReady;
                 }
                 catch (InvalidOperationException)
                 {
-                    // This exception can be thrown when we are trying to
-                    // enable streams on a device that has gone away.  This
-                    // can occur, say, in app shutdown scenarios when the sensor
-                    // goes away between the time it changed status and the
-                    // time we get the sensor changed notification.
-                    //
-                    // Behavior here is to just eat the exception and assume
-                    // another notification will come along if a sensor
-                    // comes back.
                 }
+            }
+            else
+            {
+                this.statusBarText.Text = Properties.Resources.NoKinectReady;
             }
         }
 
+
+        private void KinectSensorOnAllFramesReady(object sender, AllFramesReadyEventArgs allFramesReadyEventArgs)
+        {
+            if (null == this.sensor)
+            {
+                return;
+            }
+
+            bool depthReceived = false;
+            bool colorReceived = false;
+            bool bodyReceived = false;
+
+            Skeleton[] skeletons = null;
+            List<Point> points = new List<Point>();
+
+            using (SkeletonFrame skeletonFrame = allFramesReadyEventArgs.OpenSkeletonFrame())
+            {
+                if (skeletonFrame != null)
+                {
+                    bodyReceived = true;
+                    skeletons = new Skeleton[skeletonFrame.SkeletonArrayLength];
+                    skeletonFrame.CopySkeletonDataTo(skeletons);
+                }
+            }
+
+            int leftBound = 0;
+            int topBound = 0;
+            int rightBound = 0;
+            int bottomBound = 0;
+
+            if (bodyReceived)
+            {
+                foreach (var skel in skeletons)
+                {
+                    if (skel.TrackingState == SkeletonTrackingState.Tracked)
+                    {
+                        Joint handLeft = skel.Joints[JointType.HandLeft];
+                        Joint wristLeft = skel.Joints[JointType.WristLeft];
+                        Joint shoulder0 = skel.Joints[JointType.ShoulderLeft];
+                        Joint shoulder1 = skel.Joints[JointType.ShoulderRight];
+
+                        var shoulder0Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder0.Position, ColorImageFormat.RgbResolution640x480Fps30);
+                        var shoulder1Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder1.Position, ColorImageFormat.RgbResolution640x480Fps30);
+                        float bodyScaleColor = 0.4f * (float)Math.Sqrt(
+                            (shoulder1Color.X - shoulder0Color.X) * (shoulder1Color.X - shoulder0Color.X)
+                            + (shoulder1Color.Y - shoulder0Color.Y) * (shoulder1Color.Y - shoulder0Color.Y));
+
+                        ColorImagePoint handColor =
+                        this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(handLeft.Position,
+                            ColorImageFormat.RgbResolution640x480Fps30);
+                        ColorImagePoint wristColor =
+                        this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(wristLeft.Position,
+                            ColorImageFormat.RgbResolution640x480Fps30);
+
+                        leftBound = (int)(handColor.X - bodyScaleColor);
+                        topBound = (int)(handColor.Y - bodyScaleColor);
+                        rightBound = (int)(handColor.X + bodyScaleColor);
+                        bottomBound = (int)(handColor.Y + bodyScaleColor);
+
+                        points.Add(new Point(handColor.X, handColor.Y));
+                        points.Add(new Point(wristColor.X, wristColor.Y));
+                    }
+                }
+            }
+
+            using (DepthImageFrame depthFrame = allFramesReadyEventArgs.OpenDepthImageFrame())
+            {
+                if (null != depthFrame)
+                {
+                    // Copy the pixel data from the image to a temporary array
+                    depthFrame.CopyDepthImagePixelDataTo(this.depthPixels);
+                    depthReceived = true;
+                }
+            }
+
+
+            List<int> colorIndices = new List<int>();
+            var depths = new List<float>();
+            Dictionary<float, int> depthsColorIndices = new Dictionary<float, int>();
+
+            if (true == depthReceived && true == bodyReceived)
+            {
+                this.sensor.CoordinateMapper.MapDepthFrameToColorFrame(
+                    DepthFormat,
+                    this.depthPixels,
+                    ColorFormat,
+                    this.colorCoordinates);
+
+                // loop over each row and column of the depth
+                for (int y = 0; y < this.depthHeight; ++y)
+                {
+                    for (int x = 0; x < this.depthWidth; ++x)
+                    {
+                        // calculate index into depth array
+                        int depthIndex = x + (y * this.depthWidth);
+
+                        DepthImagePixel depthPixel = this.depthPixels[depthIndex];
+                        int player = depthPixel.PlayerIndex;
+                        // assuming one player
+                        if (player > 0 && depthPixel.IsKnownDepth)
+                        {
+                            // retrieve the depth to color mapping for the current depth pixel
+                            ColorImagePoint colorImagePoint = this.colorCoordinates[depthIndex];
+
+                            if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
+                                && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
+                            {
+                                colorIndices.Add(colorImagePoint.X + colorImagePoint.Y * colorWidth);
+                                depths.Add(depthPixel.Depth * 1e-3f);
+                            }
+                        }
+                    }
+                }
+            }
+
+            using (var colorImageFrame = allFramesReadyEventArgs.OpenColorImageFrame())
+            {
+                if (colorImageFrame == null)
+                {
+                    return;
+                }
+
+                colorImageFrame.CopyPixelDataTo(this.colorPixels);
+                colorReceived = true;
+            }
+
+
+
+            if (colorReceived)
+            {
+
+                var n_colorIndices = colorIndices.Count;
+                for (int i = 0; i < n_colorIndices; i++)
+                {
+                    int index = colorIndices[i];
+                    this.colorPixels[index * 4 + 0] = 0;
+                    this.colorPixels[index * 4 + 1] = 255;
+                    this.colorPixels[index * 4 + 2] = 0;
+                    this.colorPixels[index * 4 + 3] = 255;
+                }
+
+                this.colorBitmap.WritePixels(new Int32Rect(0, 0, this.colorWidth, this.colorHeight),
+                    this.colorPixels,
+                    this.colorBitmap.PixelWidth * sizeof(int), 0);
+            }
+
+
+
+            using (DrawingContext dc = this.drawingGroup.Open())
+            {
+                dc.DrawImage(this.colorBitmap, new Rect(0, 0, this.colorWidth, this.colorHeight));
+
+                // if draw hands
+                for (var i = 0; i < points.Count; i += 2)
+                {
+                    dc.DrawLine(this.penX, points[i], points[i + 1]);
+                }
+
+                // prevent drawing outside of our render area
+                this.drawingGroup.ClipGeometry = new RectangleGeometry(new Rect(0.0, 0.0, this.colorWidth, this.colorHeight));
+            }
+
+        }
 
         /// <summary>
         /// Execute startup tasks
@@ -217,54 +321,6 @@ namespace Palmpose360
         {
             Image.Source = this.imageSource;
         }
-        //private void WindowLoaded(object sender, RoutedEventArgs e)
-        //{
-        //    // Look through all sensors and start the first connected one.
-        //    // This requires that a Kinect is connected at the time of app startup.
-        //    // To make your app robust against plug/unplug, 
-        //    // it is recommended to use KinectSensorChooser provided in Microsoft.Kinect.Toolkit (See components in Toolkit Browser).
-        //    foreach (var potentialSensor in KinectSensor.KinectSensors)
-        //    {
-        //        if (potentialSensor.Status == KinectStatus.Connected)
-        //        {
-        //            this.sensor = potentialSensor;
-        //            break;
-        //        }
-        //    }
-
-        //    if (null != this.sensor)
-        //    {
-        //        // Turn on the color stream to receive color frames
-        //        this.sensor.ColorStream.Enable(ColorImageFormat.RgbResolution640x480Fps30);
-
-        //        // Allocate space to put the pixels we'll receive
-        //        this.colorPixels = new byte[this.sensor.ColorStream.FramePixelDataLength];
-
-        //        // This is the bitmap we'll display on-screen
-        //        this.colorBitmap = new WriteableBitmap(this.sensor.ColorStream.FrameWidth, this.sensor.ColorStream.FrameHeight, 96.0, 96.0, PixelFormats.Bgr32, null);
-
-        //        // Set the image we display to point to the bitmap where we'll put the image data
-        //        this.Image.Source = this.colorBitmap;
-
-        //        // Add an event handler to be called whenever there is new color frame data
-        //        this.sensor.ColorFrameReady += this.SensorColorFrameReady;
-
-        //        // Start the sensor!
-        //        try
-        //        {
-        //            this.sensor.Start();
-        //        }
-        //        catch (IOException)
-        //        {
-        //            this.sensor = null;
-        //        }
-        //    }
-
-        //    if (null == this.sensor)
-        //    {
-        //        this.statusBarText.Text = Properties.Resources.NoKinectReady;
-        //    }
-        //}
 
         /// <summary>
         /// Execute shutdown tasks
