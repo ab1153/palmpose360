@@ -15,7 +15,31 @@ namespace Palmpose360
     using System.Windows.Media.Imaging;
     using Microsoft.Kinect;
     using Microsoft.Kinect.Toolkit;
+    using System.Runtime.InteropServices;
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PointXYZ
+    {
+        public float x;
+        public float y;
+        public float z;
+        private float placeholder;
+        public PointXYZ(float x, float y, float z)
+        {
+            this.x = x; this.y = y; this.z = z; this.placeholder = 0.0f;
+        }
+    }
+
+    public class ExternalAPI
+    {
+#if DEBUG
+        [DllImport("../../Debug/PointCloud.dll", EntryPoint = "#1", CallingConvention = CallingConvention.Cdecl)]
+#else
+        [DllImport("../../Release/PointCloud.dll", EntryPoint = "#1", CallingConvention = CallingConvention.Cdecl)]
+#endif
+        public static extern int infer_palmpose(ref PointXYZ v1, ref PointXYZ v2, ref PointXYZ v3, [In, Out] PointXYZ[] pointArray, ref int size, ref PointXYZ hand, ref PointXYZ wrist);
+
+    }
 
     /// <summary>
     /// Interaction logic for MainWindow.xaml
@@ -162,6 +186,11 @@ namespace Palmpose360
 
             Skeleton[] skeletons = null;
             List<Point> points = new List<Point>();
+            Point handPointColor = new Point() { };
+            Point wristPointColor = new Point() { };
+            PointXYZ handXYZ = new PointXYZ();
+            PointXYZ wristXYZ = new PointXYZ();
+
 
             using (SkeletonFrame skeletonFrame = allFramesReadyEventArgs.OpenSkeletonFrame())
             {
@@ -207,8 +236,14 @@ namespace Palmpose360
                         rightBound = (int)(handColor.X + bodyScaleColor);
                         bottomBound = (int)(handColor.Y + bodyScaleColor);
 
-                        points.Add(new Point(handColor.X, handColor.Y));
-                        points.Add(new Point(wristColor.X, wristColor.Y));
+                        handPointColor = new Point(handColor.X, handColor.Y);
+                        wristPointColor = new Point(wristColor.X, wristColor.Y);
+                        handXYZ = new PointXYZ(handLeft.Position.X, handLeft.Position.Y, handLeft.Position.Z);
+                        wristXYZ = new PointXYZ(wristLeft.Position.X, wristLeft.Position.Y, wristLeft.Position.Z);
+
+                        // quit after handling one player
+                        // assuming only one player
+                        break;
                     }
                 }
             }
@@ -225,8 +260,8 @@ namespace Palmpose360
 
 
             List<int> colorIndices = new List<int>();
-            var depths = new List<float>();
-            Dictionary<float, int> depthsColorIndices = new Dictionary<float, int>();
+            List<SkeletonPoint> candidatePoints = new List<SkeletonPoint>();
+            Dictionary<SkeletonPoint, int> pointColorDict = new Dictionary<SkeletonPoint, int>();
 
             if (true == depthReceived && true == bodyReceived)
             {
@@ -235,6 +270,7 @@ namespace Palmpose360
                     this.depthPixels,
                     ColorFormat,
                     this.colorCoordinates);
+
 
                 // loop over each row and column of the depth
                 for (int y = 0; y < this.depthHeight; ++y)
@@ -255,8 +291,14 @@ namespace Palmpose360
                             if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
                                 && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
                             {
-                                colorIndices.Add(colorImagePoint.X + colorImagePoint.Y * colorWidth);
-                                depths.Add(depthPixel.Depth * 1e-3f);
+                                int colorIndex = colorImagePoint.X + colorImagePoint.Y * colorWidth;
+                                colorIndices.Add(colorIndex);
+
+                                DepthImagePoint dp = new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth };
+                                SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(DepthFormat, dp);
+                                candidatePoints.Add(p);
+
+                                pointColorDict.Add(p, colorIndex);
                             }
                         }
                     }
@@ -274,42 +316,86 @@ namespace Palmpose360
                 colorReceived = true;
             }
 
-
-
-            if (colorReceived)
+            if (true == depthReceived && true == bodyReceived && true == colorReceived)
             {
+                int nPoint = candidatePoints.Count;
 
-                var n_colorIndices = colorIndices.Count;
-                for (int i = 0; i < n_colorIndices; i++)
+                if (nPoint > 20)
                 {
-                    int index = colorIndices[i];
-                    this.colorPixels[index * 4 + 0] = 0;
-                    this.colorPixels[index * 4 + 1] = 255;
-                    this.colorPixels[index * 4 + 2] = 0;
-                    this.colorPixels[index * 4 + 3] = 255;
+                    PointXYZ[] pointCloud = new PointXYZ[nPoint];
+                    for (int i = 0; i < nPoint; i++)
+                    {
+                        pointCloud[i] = new PointXYZ(candidatePoints[i].X, candidatePoints[i].Y, candidatePoints[i].Z);
+                    }
+
+                    int pointCloudLength = pointCloud.Length;
+
+                    PointXYZ v1 = new PointXYZ();
+                    PointXYZ v2 = new PointXYZ();
+                    PointXYZ v3 = new PointXYZ();
+
+                    ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
+                        ref handXYZ, ref wristXYZ);
+
+
+                    SkeletonPoint[] skelPoints = new SkeletonPoint[pointCloudLength];
+                    ColorImagePoint[] newColorPoints = new ColorImagePoint[pointCloudLength];
+                    for (int i = 0; i < pointCloudLength; i++)
+                    {
+                        skelPoints[i].X = pointCloud[i].x;
+                        skelPoints[i].Y = pointCloud[i].y;
+                        skelPoints[i].Z = pointCloud[i].z;
+                    }
+
+                    for(int i = 0; i < pointCloudLength; i++)
+                    {
+                        ColorImagePoint colorP = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(skelPoints[i], ColorFormat);
+                        newColorPoints[i] = colorP;
+                    }
+
+                    foreach (var cp in newColorPoints)
+                    {
+                        {
+                            int index = cp.X + cp.Y * this.colorWidth;
+                            this.colorPixels[index * 4 + 0] = 0;
+                            this.colorPixels[index * 4 + 1] = 255;
+                            this.colorPixels[index * 4 + 2] = 0;
+                            this.colorPixels[index * 4 + 3] = 255;
+
+                        }
+                    }
+
+                    //int n_colorIndices = colorIndices.Count;
+                    //for (int i = 0; i < n_colorIndices; i++)
+                    //{
+                    //    int index = colorIndices[i];
+                    //    this.colorPixels[index * 4 + 0] = 0;
+                    //    this.colorPixels[index * 4 + 1] = 255;
+                    //    this.colorPixels[index * 4 + 2] = 0;
+                    //    this.colorPixels[index * 4 + 3] = 255;
+                    //}
                 }
+
 
                 this.colorBitmap.WritePixels(new Int32Rect(0, 0, this.colorWidth, this.colorHeight),
                     this.colorPixels,
                     this.colorBitmap.PixelWidth * sizeof(int), 0);
-            }
 
-
-
-            using (DrawingContext dc = this.drawingGroup.Open())
-            {
-                dc.DrawImage(this.colorBitmap, new Rect(0, 0, this.colorWidth, this.colorHeight));
-
-                // if draw hands
-                for (var i = 0; i < points.Count; i += 2)
+                using (DrawingContext dc = this.drawingGroup.Open())
                 {
-                    dc.DrawLine(this.penX, points[i], points[i + 1]);
+                    dc.DrawImage(this.colorBitmap, new Rect(0, 0, this.colorWidth, this.colorHeight));
+
+                    // if draw hands
+                    if (bodyReceived)
+                    {
+                        dc.DrawLine(this.penX, handPointColor, wristPointColor);
+                    }
+
+                    // prevent drawing outside of our render area
+                    this.drawingGroup.ClipGeometry = new RectangleGeometry(new Rect(0.0, 0.0, this.colorWidth, this.colorHeight));
                 }
 
-                // prevent drawing outside of our render area
-                this.drawingGroup.ClipGeometry = new RectangleGeometry(new Rect(0.0, 0.0, this.colorWidth, this.colorHeight));
             }
-
         }
 
         /// <summary>
