@@ -213,16 +213,17 @@ namespace Palmpose360
                 {
                     if (skel.TrackingState == SkeletonTrackingState.Tracked)
                     {
-                        Joint handLeft = skel.Joints[JointType.HandLeft];
-                        Joint wristLeft = skel.Joints[JointType.WristLeft];
+                        Joint handLeft = skel.Joints[JointType.HandRight];
+                        Joint wristLeft = skel.Joints[JointType.WristRight];
                         Joint shoulder0 = skel.Joints[JointType.ShoulderLeft];
                         Joint shoulder1 = skel.Joints[JointType.ShoulderRight];
 
                         var shoulder0Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder0.Position, ColorImageFormat.RgbResolution640x480Fps30);
                         var shoulder1Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder1.Position, ColorImageFormat.RgbResolution640x480Fps30);
-                        float bodyScaleColor = 0.4f * (float)Math.Sqrt(
-                            (shoulder1Color.X - shoulder0Color.X) * (shoulder1Color.X - shoulder0Color.X)
-                            + (shoulder1Color.Y - shoulder0Color.Y) * (shoulder1Color.Y - shoulder0Color.Y));
+                        //float bodyScaleColor = 0.4f * (float)Math.Sqrt(
+                        //    (shoulder1Color.X - shoulder0Color.X) * (shoulder1Color.X - shoulder0Color.X)
+                        //    + (shoulder1Color.Y - shoulder0Color.Y) * (shoulder1Color.Y - shoulder0Color.Y));
+                        float bodyScaleColor = 10.0f + 40.0f / handLeft.Position.Z;
 
                         ColorImagePoint handColor =
                         this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(handLeft.Position,
@@ -259,9 +260,7 @@ namespace Palmpose360
             }
 
 
-            List<int> colorIndices = new List<int>();
             List<SkeletonPoint> candidatePoints = new List<SkeletonPoint>();
-            Dictionary<SkeletonPoint, int> pointColorDict = new Dictionary<SkeletonPoint, int>();
 
             if (true == depthReceived && true == bodyReceived)
             {
@@ -291,14 +290,9 @@ namespace Palmpose360
                             if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
                                 && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
                             {
-                                int colorIndex = colorImagePoint.X + colorImagePoint.Y * colorWidth;
-                                colorIndices.Add(colorIndex);
-
                                 DepthImagePoint dp = new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth };
                                 SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(DepthFormat, dp);
                                 candidatePoints.Add(p);
-
-                                pointColorDict.Add(p, colorIndex);
                             }
                         }
                     }
@@ -316,6 +310,10 @@ namespace Palmpose360
                 colorReceived = true;
             }
 
+            PointXYZ v1 = new PointXYZ();
+            PointXYZ v2 = new PointXYZ();
+            PointXYZ v3 = new PointXYZ();
+
             if (true == depthReceived && true == bodyReceived && true == colorReceived)
             {
                 int nPoint = candidatePoints.Count;
@@ -330,9 +328,7 @@ namespace Palmpose360
 
                     int pointCloudLength = pointCloud.Length;
 
-                    PointXYZ v1 = new PointXYZ();
-                    PointXYZ v2 = new PointXYZ();
-                    PointXYZ v3 = new PointXYZ();
+
 
                     ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
                         ref handXYZ, ref wristXYZ);
@@ -365,15 +361,6 @@ namespace Palmpose360
                         }
                     }
 
-                    //int n_colorIndices = colorIndices.Count;
-                    //for (int i = 0; i < n_colorIndices; i++)
-                    //{
-                    //    int index = colorIndices[i];
-                    //    this.colorPixels[index * 4 + 0] = 0;
-                    //    this.colorPixels[index * 4 + 1] = 255;
-                    //    this.colorPixels[index * 4 + 2] = 0;
-                    //    this.colorPixels[index * 4 + 3] = 255;
-                    //}
                 }
 
 
@@ -388,7 +375,36 @@ namespace Palmpose360
                     // if draw hands
                     if (bodyReceived)
                     {
-                        dc.DrawLine(this.penX, handPointColor, wristPointColor);
+                        SkeletonPoint origin = new SkeletonPoint();
+                        origin.X = handXYZ.x;
+                        origin.Y = handXYZ.y;
+                        origin.Z = handXYZ.z;
+                        ColorImagePoint originDepth = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(origin, ColorFormat);
+
+                        const float len = 0.2f;
+
+                        SkeletonPoint end1 = new SkeletonPoint();
+                        end1.X = origin.X + len * v1.x;
+                        end1.Y = origin.Y + len * v1.y;
+                        end1.Z = origin.Z + len * v1.z;
+                        ColorImagePoint end1Depth = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(end1, ColorFormat);
+
+
+                        SkeletonPoint end2 = new SkeletonPoint();
+                        end2.X = origin.X + len * v2.x;
+                        end2.Y = origin.Y + len * v2.y;
+                        end2.Z = origin.Z + len * v2.z;
+                        ColorImagePoint end2Depth = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(end2, ColorFormat);
+
+                        SkeletonPoint end3 = new SkeletonPoint();
+                        end3.X = origin.X + len * v3.x;
+                        end3.Y = origin.Y + len * v3.y;
+                        end3.Z = origin.Z + len * v3.z;
+                        ColorImagePoint end3Depth = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(end3, ColorFormat);
+
+                        dc.DrawLine(penX, new Point(originDepth.X, originDepth.Y), new Point(end1Depth.X, end1Depth.Y));
+                        dc.DrawLine(penY, new Point(originDepth.X, originDepth.Y), new Point(end2Depth.X, end2Depth.Y));
+                        dc.DrawLine(penZ, new Point(originDepth.X, originDepth.Y), new Point(end3Depth.X, end3Depth.Y));
                     }
 
                     // prevent drawing outside of our render area
