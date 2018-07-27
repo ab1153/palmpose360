@@ -16,6 +16,10 @@ namespace Palmpose360
     using Microsoft.Kinect;
     using Microsoft.Kinect.Toolkit;
     using System.Runtime.InteropServices;
+    using Emgu.CV;
+    using Emgu.CV.Util;
+    using Emgu.CV.Structure;
+    using Emgu.CV.CvEnum;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct PointXYZ
@@ -191,6 +195,16 @@ namespace Palmpose360
             PointXYZ handXYZ = new PointXYZ();
             PointXYZ wristXYZ = new PointXYZ();
 
+            using (var colorImageFrame = allFramesReadyEventArgs.OpenColorImageFrame())
+            {
+                if (colorImageFrame == null)
+                {
+                    return;
+                }
+
+                colorImageFrame.CopyPixelDataTo(this.colorPixels);
+                colorReceived = true;
+            }
 
             using (SkeletonFrame skeletonFrame = allFramesReadyEventArgs.OpenSkeletonFrame())
             {
@@ -213,8 +227,8 @@ namespace Palmpose360
                 {
                     if (skel.TrackingState == SkeletonTrackingState.Tracked)
                     {
-                        Joint handLeft = skel.Joints[JointType.HandRight];
-                        Joint wristLeft = skel.Joints[JointType.WristRight];
+                        Joint handLeft = skel.Joints[JointType.HandLeft];
+                        Joint wristLeft = skel.Joints[JointType.WristLeft];
                         Joint shoulder0 = skel.Joints[JointType.ShoulderLeft];
                         Joint shoulder1 = skel.Joints[JointType.ShoulderRight];
 
@@ -223,7 +237,7 @@ namespace Palmpose360
                         //float bodyScaleColor = 0.4f * (float)Math.Sqrt(
                         //    (shoulder1Color.X - shoulder0Color.X) * (shoulder1Color.X - shoulder0Color.X)
                         //    + (shoulder1Color.Y - shoulder0Color.Y) * (shoulder1Color.Y - shoulder0Color.Y));
-                        float bodyScaleColor = 10.0f + 40.0f / handLeft.Position.Z;
+                        float bodyScaleColor = 15.0f + 30.0f / handLeft.Position.Z;
 
                         ColorImagePoint handColor =
                         this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(handLeft.Position,
@@ -232,10 +246,10 @@ namespace Palmpose360
                         this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(wristLeft.Position,
                             ColorImageFormat.RgbResolution640x480Fps30);
 
-                        leftBound = (int)(handColor.X - bodyScaleColor);
-                        topBound = (int)(handColor.Y - bodyScaleColor);
-                        rightBound = (int)(handColor.X + bodyScaleColor);
-                        bottomBound = (int)(handColor.Y + bodyScaleColor);
+                        leftBound = (handColor.X - bodyScaleColor) < 0 ? 0 : (int)(handColor.X - bodyScaleColor);
+                        topBound = (handColor.Y - bodyScaleColor) < 0 ? 0 : (int)(handColor.Y - bodyScaleColor);
+                        rightBound = (handColor.X + bodyScaleColor) > colorWidth ? colorWidth : (int)(handColor.X + bodyScaleColor);
+                        bottomBound = (handColor.Y + bodyScaleColor) > colorHeight ? colorHeight : (int)(handColor.Y + bodyScaleColor);
 
                         handPointColor = new Point(handColor.X, handColor.Y);
                         wristPointColor = new Point(wristColor.X, wristColor.Y);
@@ -262,7 +276,7 @@ namespace Palmpose360
 
             List<SkeletonPoint> candidatePoints = new List<SkeletonPoint>();
 
-            if (true == depthReceived && true == bodyReceived)
+            if (true == depthReceived && true == bodyReceived && true == colorReceived)
             {
                 this.sensor.CoordinateMapper.MapDepthFrameToColorFrame(
                     DepthFormat,
@@ -270,99 +284,122 @@ namespace Palmpose360
                     ColorFormat,
                     this.colorCoordinates);
 
+                System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(colorWidth, colorHeight);
+
+                Image<Bgra, Byte> img = new Image<Bgra, byte>(colorWidth, colorHeight);
+                img.Bytes = this.colorPixels;
+
+                Image<Bgra, Byte> crop = null;
+                Image<Gray, Byte> res = null;
+                if (bottomBound > topBound && rightBound > leftBound)
+                {
+                    crop = img.Copy(new System.Drawing.Rectangle(
+                        leftBound, topBound, rightBound - leftBound, bottomBound - topBound));
+
+                    Image<Gray, Byte> canny = crop.Convert<Gray, Byte>().Canny(50, 150);
+                    VectorOfVectorOfPoint vvp = new VectorOfVectorOfPoint();
+                    CvInvoke.FindContours(canny, vvp, null, RetrType.Ccomp, ChainApproxMethod.ChainApproxNone);
+                    res = new Image<Gray, byte>(crop.Width, crop.Height);
+                    for (int i = 0; i < vvp.Size; i++)
+                    {
+                        for (int j = 0; j < vvp[i].Size; j++)
+                        {
+                            res.Data[vvp[i][j].Y, vvp[i][j].X, 0] = 255;
+                        }
+                    }
+                }
+
 
                 // loop over each row and column of the depth
-                for (int y = 0; y < this.depthHeight; ++y)
-                {
-                    for (int x = 0; x < this.depthWidth; ++x)
-                    {
-                        // calculate index into depth array
-                        int depthIndex = x + (y * this.depthWidth);
+                //for (int y = 0; y < this.depthHeight; ++y)
+                //{
+                //    for (int x = 0; x < this.depthWidth; ++x)
+                //    {
+                //        // calculate index into depth array
+                //        int depthIndex = x + (y * this.depthWidth);
+                //        DepthImagePixel depthPixel = this.depthPixels[depthIndex];
+                //        int player = depthPixel.PlayerIndex;
+                //        // assuming one player
+                //        if (player > 0 && depthPixel.IsKnownDepth)
+                //        {
+                //            // retrieve the depth to color mapping for the current depth pixel
+                //            ColorImagePoint colorImagePoint = this.colorCoordinates[depthIndex];
+                //            if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
+                //                && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
+                //            {
+                //                SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(
+                //                    DepthFormat,
+                //                    new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth });
+                //                candidatePoints.Add(p);
+                //            }
+                //        }
+                //    }
+                //}
 
-                        DepthImagePixel depthPixel = this.depthPixels[depthIndex];
-                        int player = depthPixel.PlayerIndex;
-                        // assuming one player
-                        if (player > 0 && depthPixel.IsKnownDepth)
-                        {
-                            // retrieve the depth to color mapping for the current depth pixel
-                            ColorImagePoint colorImagePoint = this.colorCoordinates[depthIndex];
+                PointXYZ v1 = new PointXYZ();
+                PointXYZ v2 = new PointXYZ();
+                PointXYZ v3 = new PointXYZ();
 
-                            if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
-                                && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
-                            {
-                                DepthImagePoint dp = new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth };
-                                SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(DepthFormat, dp);
-                                candidatePoints.Add(p);
-                            }
-                        }
-                    }
-                }
-            }
-
-            using (var colorImageFrame = allFramesReadyEventArgs.OpenColorImageFrame())
-            {
-                if (colorImageFrame == null)
-                {
-                    return;
-                }
-
-                colorImageFrame.CopyPixelDataTo(this.colorPixels);
-                colorReceived = true;
-            }
-
-            PointXYZ v1 = new PointXYZ();
-            PointXYZ v2 = new PointXYZ();
-            PointXYZ v3 = new PointXYZ();
-
-            if (true == depthReceived && true == bodyReceived && true == colorReceived)
-            {
                 int nPoint = candidatePoints.Count;
 
-                if (nPoint > 20)
+                //if (nPoint > 20)
+                //{
+                //    PointXYZ[] pointCloud = new PointXYZ[nPoint];
+                //    for (int i = 0; i < nPoint; i++)
+                //    {
+                //        pointCloud[i] = new PointXYZ(candidatePoints[i].X, candidatePoints[i].Y, candidatePoints[i].Z);
+                //    }
+                //    int pointCloudLength = pointCloud.Length;
+                //    ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
+                //        ref handXYZ, ref wristXYZ);
+                //    SkeletonPoint[] skelPoints = new SkeletonPoint[pointCloudLength];
+                //    ColorImagePoint[] newColorPoints = new ColorImagePoint[pointCloudLength];
+                //    for (int i = 0; i < pointCloudLength; i++)
+                //    {
+                //        skelPoints[i].X = pointCloud[i].x;
+                //        skelPoints[i].Y = pointCloud[i].y;
+                //        skelPoints[i].Z = pointCloud[i].z;
+                //    }
+                //    for(int i = 0; i < pointCloudLength; i++)
+                //    {
+                //        ColorImagePoint colorP = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(skelPoints[i], ColorFormat);
+                //        newColorPoints[i] = colorP;
+                //    }
+                //    foreach (var cp in newColorPoints)
+                //    {
+                //        {
+                //            int index = cp.X + cp.Y * this.colorWidth;
+                //            this.colorPixels[index * 4 + 0] = 0;
+                //            this.colorPixels[index * 4 + 1] = 0;
+                //            this.colorPixels[index * 4 + 2] = 255;
+                //            this.colorPixels[index * 4 + 3] = 255;
+                //        }
+                //    }
+                //}
+
+
+                if (res!= null)
                 {
-                    PointXYZ[] pointCloud = new PointXYZ[nPoint];
-                    for (int i = 0; i < nPoint; i++)
+                    Image<Bgra, Byte> resColor = res.Convert<Bgra, Byte>();
+
+                    int x = leftBound;
+                    int y = topBound;
+                    int w = rightBound - leftBound;
+                    int h = bottomBound - topBound;
+                    int offset = x + y * colorWidth;
+                    int ii = offset * 4;
+                    for (int i = 0; i < h; i++)
                     {
-                        pointCloud[i] = new PointXYZ(candidatePoints[i].X, candidatePoints[i].Y, candidatePoints[i].Z);
-                    }
-
-                    int pointCloudLength = pointCloud.Length;
-
-
-
-                    ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
-                        ref handXYZ, ref wristXYZ);
-
-
-                    SkeletonPoint[] skelPoints = new SkeletonPoint[pointCloudLength];
-                    ColorImagePoint[] newColorPoints = new ColorImagePoint[pointCloudLength];
-                    for (int i = 0; i < pointCloudLength; i++)
-                    {
-                        skelPoints[i].X = pointCloud[i].x;
-                        skelPoints[i].Y = pointCloud[i].y;
-                        skelPoints[i].Z = pointCloud[i].z;
-                    }
-
-                    for(int i = 0; i < pointCloudLength; i++)
-                    {
-                        ColorImagePoint colorP = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(skelPoints[i], ColorFormat);
-                        newColorPoints[i] = colorP;
-                    }
-
-                    foreach (var cp in newColorPoints)
-                    {
+                        for (int j = 0; j < w; j++)
                         {
-                            int index = cp.X + cp.Y * this.colorWidth;
-                            this.colorPixels[index * 4 + 0] = 0;
-                            this.colorPixels[index * 4 + 1] = 255;
-                            this.colorPixels[index * 4 + 2] = 0;
-                            this.colorPixels[index * 4 + 3] = 255;
-
+                            this.colorPixels[ii++] = resColor.Data[i, j, 0];
+                            this.colorPixels[ii++] = resColor.Data[i, j, 1];
+                            this.colorPixels[ii++] = resColor.Data[i, j, 2];
+                            this.colorPixels[ii++] = 255;
                         }
+                        ii += (colorWidth - w) * 4;
                     }
-
                 }
-
 
                 this.colorBitmap.WritePixels(new Int32Rect(0, 0, this.colorWidth, this.colorHeight),
                     this.colorPixels,
