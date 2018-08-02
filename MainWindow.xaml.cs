@@ -311,94 +311,94 @@ namespace Palmpose360
 
 
                 // loop over each row and column of the depth
-                //for (int y = 0; y < this.depthHeight; ++y)
-                //{
-                //    for (int x = 0; x < this.depthWidth; ++x)
-                //    {
-                //        // calculate index into depth array
-                //        int depthIndex = x + (y * this.depthWidth);
-                //        DepthImagePixel depthPixel = this.depthPixels[depthIndex];
-                //        int player = depthPixel.PlayerIndex;
-                //        // assuming one player
-                //        if (player > 0 && depthPixel.IsKnownDepth)
-                //        {
-                //            // retrieve the depth to color mapping for the current depth pixel
-                //            ColorImagePoint colorImagePoint = this.colorCoordinates[depthIndex];
-                //            if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
-                //                && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
-                //            {
-                //                SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(
-                //                    DepthFormat,
-                //                    new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth });
-                //                candidatePoints.Add(p);
-                //            }
-                //        }
-                //    }
-                //}
+                for (int y = 0; y < this.depthHeight; ++y)
+                {
+                    for (int x = 0; x < this.depthWidth; ++x)
+                    {
+                        // calculate index into depth array
+                        int depthIndex = x + (y * this.depthWidth);
+                        DepthImagePixel depthPixel = this.depthPixels[depthIndex];
+                        int player = depthPixel.PlayerIndex;
+                        // assuming one player
+                        if (player > 0 && depthPixel.IsKnownDepth)
+                        {
+                            // retrieve the depth to color mapping for the current depth pixel
+                            ColorImagePoint colorImagePoint = this.colorCoordinates[depthIndex];
+                            if (colorImagePoint.X >= leftBound && colorImagePoint.X < rightBound
+                                && colorImagePoint.Y >= topBound && colorImagePoint.Y < bottomBound)
+                            {
+                                SkeletonPoint p = this.sensor.CoordinateMapper.MapDepthPointToSkeletonPoint(
+                                    DepthFormat,
+                                    new DepthImagePoint() { X = x, Y = y, Depth = depthPixel.Depth });
+                                candidatePoints.Add(p);
+                            }
+                        }
+                    }
+                }
 
                 PointXYZ v1 = new PointXYZ();
                 PointXYZ v2 = new PointXYZ();
                 PointXYZ v3 = new PointXYZ();
 
                 int nPoint = candidatePoints.Count;
-
-                //if (nPoint > 20)
-                //{
-                //    PointXYZ[] pointCloud = new PointXYZ[nPoint];
-                //    for (int i = 0; i < nPoint; i++)
-                //    {
-                //        pointCloud[i] = new PointXYZ(candidatePoints[i].X, candidatePoints[i].Y, candidatePoints[i].Z);
-                //    }
-                //    int pointCloudLength = pointCloud.Length;
-                //    ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
-                //        ref handXYZ, ref wristXYZ);
-                //    SkeletonPoint[] skelPoints = new SkeletonPoint[pointCloudLength];
-                //    ColorImagePoint[] newColorPoints = new ColorImagePoint[pointCloudLength];
-                //    for (int i = 0; i < pointCloudLength; i++)
-                //    {
-                //        skelPoints[i].X = pointCloud[i].x;
-                //        skelPoints[i].Y = pointCloud[i].y;
-                //        skelPoints[i].Z = pointCloud[i].z;
-                //    }
-                //    for(int i = 0; i < pointCloudLength; i++)
-                //    {
-                //        ColorImagePoint colorP = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(skelPoints[i], ColorFormat);
-                //        newColorPoints[i] = colorP;
-                //    }
-                //    foreach (var cp in newColorPoints)
-                //    {
-                //        {
-                //            int index = cp.X + cp.Y * this.colorWidth;
-                //            this.colorPixels[index * 4 + 0] = 0;
-                //            this.colorPixels[index * 4 + 1] = 0;
-                //            this.colorPixels[index * 4 + 2] = 255;
-                //            this.colorPixels[index * 4 + 3] = 255;
-                //        }
-                //    }
-                //}
+                const int min_point_size = 100;
+                if (nPoint > min_point_size)
+                {
+                    PointXYZ[] pointCloud = new PointXYZ[nPoint];
+                    for (int i = 0; i < nPoint; i++)
+                    {
+                        pointCloud[i] = new PointXYZ(candidatePoints[i].X, candidatePoints[i].Y, candidatePoints[i].Z);
+                    }
+                    int pointCloudLength = pointCloud.Length;
+                    ExternalAPI.infer_palmpose(ref v1, ref v2, ref v3, pointCloud, ref pointCloudLength,
+                        ref handXYZ, ref wristXYZ);
+                    SkeletonPoint[] skelPoints = new SkeletonPoint[pointCloudLength];
+                    ColorImagePoint[] newColorPoints = new ColorImagePoint[pointCloudLength];
+                    for (int i = 0; i < pointCloudLength; i++)
+                    {
+                        skelPoints[i].X = pointCloud[i].x;
+                        skelPoints[i].Y = pointCloud[i].y;
+                        skelPoints[i].Z = pointCloud[i].z;
+                    }
+                    for (int i = 0; i < pointCloudLength; i++)
+                    {
+                        ColorImagePoint colorP = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(skelPoints[i], ColorFormat);
+                        newColorPoints[i] = colorP;
+                    }
+                    foreach (var cp in newColorPoints)
+                    {
+                        {
+                            int index = cp.X + cp.Y * this.colorWidth;
+                            this.colorPixels[index * 4 + 0] = 0;
+                            this.colorPixels[index * 4 + 1] = 255;
+                            this.colorPixels[index * 4 + 2] = 255;
+                            this.colorPixels[index * 4 + 3] = 255;
+                        }
+                    }
+                }
 
 
                 if (res!= null)
                 {
-                    Image<Bgra, Byte> resColor = res.Convert<Bgra, Byte>();
+                    //Image<Bgra, Byte> resColor = res.Convert<Bgra, Byte>();
 
-                    int x = leftBound;
-                    int y = topBound;
-                    int w = rightBound - leftBound;
-                    int h = bottomBound - topBound;
-                    int offset = x + y * colorWidth;
-                    int ii = offset * 4;
-                    for (int i = 0; i < h; i++)
-                    {
-                        for (int j = 0; j < w; j++)
-                        {
-                            this.colorPixels[ii++] = resColor.Data[i, j, 0];
-                            this.colorPixels[ii++] = resColor.Data[i, j, 1];
-                            this.colorPixels[ii++] = resColor.Data[i, j, 2];
-                            this.colorPixels[ii++] = 255;
-                        }
-                        ii += (colorWidth - w) * 4;
-                    }
+                    //int x = leftBound;
+                    //int y = topBound;
+                    //int w = rightBound - leftBound;
+                    //int h = bottomBound - topBound;
+                    //int offset = x + y * colorWidth;
+                    //int ii = offset * 4;
+                    //for (int i = 0; i < h; i++)
+                    //{
+                    //    for (int j = 0; j < w; j++)
+                    //    {
+                    //        this.colorPixels[ii++] = resColor.Data[i, j, 0];
+                    //        this.colorPixels[ii++] = resColor.Data[i, j, 1];
+                    //        this.colorPixels[ii++] = resColor.Data[i, j, 2];
+                    //        this.colorPixels[ii++] = 255;
+                    //    }
+                    //    ii += (colorWidth - w) * 4;
+                    //}
                 }
 
                 this.colorBitmap.WritePixels(new Int32Rect(0, 0, this.colorWidth, this.colorHeight),
