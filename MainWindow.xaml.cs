@@ -234,10 +234,10 @@ namespace Palmpose360
 
                         var shoulder0Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder0.Position, ColorImageFormat.RgbResolution640x480Fps30);
                         var shoulder1Color = this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(shoulder1.Position, ColorImageFormat.RgbResolution640x480Fps30);
-                        //float bodyScaleColor = 0.4f * (float)Math.Sqrt(
-                        //    (shoulder1Color.X - shoulder0Color.X) * (shoulder1Color.X - shoulder0Color.X)
-                        //    + (shoulder1Color.Y - shoulder0Color.Y) * (shoulder1Color.Y - shoulder0Color.Y));
-                        float bodyScaleColor = 15.0f + 30.0f / handLeft.Position.Z;
+
+                        // !!!important parameter to adapt the recognition region
+                        // we have to tune it
+                        float bodyScaleColor = 9.0f + 32.0f / handLeft.Position.Z;
 
                         ColorImagePoint handColor =
                         this.sensor.CoordinateMapper.MapSkeletonPointToColorPoint(handLeft.Position,
